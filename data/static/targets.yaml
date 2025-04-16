@@ -1,0 +1,26 @@
+TK:
+  Core:
+    - ACV
+  Other:
+    - PCV
+    - BVDU
+    - GCV
+pol:
+  Core:
+    - ACV
+    - FOS
+    - CDV
+  Other:
+    - PCV
+    - BVDU
+    - GCV
+UL5:
+  Core:
+    - PRI
+  Other:
+    - AMN
+UL52:
+  Core:
+    - PRI
+  Other:
+    - AMN
