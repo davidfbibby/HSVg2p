@@ -7,11 +7,9 @@ import yaml
 import itertools as it
 import pandas as pd
 
-from functools import partial, reduce
+from collections import defaultdict
+from functools import partial
 from glob import glob
-
- # To get generalUtilities and taskHandler
-sys.path.append("/home/dbibby/DevDirectory/Genomancer/src")
 
 from . import gU
 
@@ -33,117 +31,6 @@ def MOLIS_name(name):
 def log_list(data):
 	if len(data) > 10: data = data[:5] + ["..."] + data[-5:]
 	return data
-
-"CLASSES"
-
-class Table(object):
-
-	def __init__(self, name_or_df, cols=[]):
-		self.cols = cols
-		t = type(name_or_df)
-		if t == str: self.df = self.read(name_or_df)
-		elif t == type(pd.DataFrame()): self.df = name_or_df
-		else: raise
-
-	def __repr__(self):
-		return self.df.to_string()
-
-	def read(self, name):
-		self.fname = f"{data_dir}/{name}.tsv"
-		df = read_tsv(self.fname, cols=self.cols, comment="\"").fillna("").astype(str)
-		self.cols = df.columns
-		if "DATE" in df.columns:
-			df.DATE = pd.to_datetime(df.DATE, format="%Y-%m-%d")
-		return df
-
-	def append(self, df, *,
-			   fill="", dup_cols=[], sort_cols=[], reset=True, write=True):
-		"""
-		Appends <df> data to a Table.df by simple pd.concat. The following
-		actions are performed in order (i.e. reset will follow a sort).
-		- index		Adds max(Table.df.index) + 1 to the <df> index
-		- fill		The fill value for NA cells
-		- dup_cols	Removes duplicates of <dup_cols> columns (keeps first)
-		- sort		Sorts the Table.df by the columns in <sort>
-		- reset		Resets the index after concatenation
-		- write		Finally, the table is saved to file by default
-		"""
-
-		self.df = pd.concat((self.df, df)).fillna(fill)
-		if dup_cols:
-			self.df = self.df.drop_duplicates(dup_cols)
-		if sort_cols:
-			self.df = self.df.sort_values(sort_cols)
-		if reset:
-			self.df = self.df.reset_index(drop=True)
-		if write:
-			self.write()
-
-	def filter(self, filters, inverse=False, index=False, copy=False, setop=set.intersection):
-		"""
-		Returns the sub_df where all <filters> are satisfied. <filters> is a
-		list of (col, values) pairs (<col> can be "index"), returning indices
-		where col == values. The <inverse> argument defaults to all False, but
-		can be a tuple of the same length as <filters>, specifying whether a
-		filter returns the inverse or not.
-		The intersection of all indices
-		"""
-		def subdf(cv, i):
-			c, v = cv
-			v = gU.parse_input_data(v)
-			if c == "index": boolean = self.df.index.isin(v)
-			else: boolean = self.df[c].isin(v)
-			if i: boolean = ~boolean
-			return set(self.df[boolean].index)
-
-		if type(filters[0]) != tuple: filters = (filters, )
-		if type(inverse) == bool: inverse = it.repeat(inverse, len(filters))
-
-		indices = sorted(
-			setop(*it.starmap(subdf, zip(filters, inverse)))
-		)
-		if index: return indices
-		df = self.df.loc[indices]
-		if copy: return Table(df.copy())
-		return df
-
-	def write(self):
-		gU.write_tsv(self.df, self.fname, index=True)
-
-################################################################################
-
-"SET UP TABLES FROM DATA TSVs"
-
-def setup_tables():
-
-	# Variable tables - these get updated with new data
-	#	fas		FASTA sequences, with source RUN ID, date of run etc.
-	#	var		Variants detected in FASTAs, with an ID link to <fas>
-	#	phe		PRA files
-	#	sir		Susceptibilities from PRAs, with an ID link to <phe>
-
-	cfg.fas = Table("FASTAS", ["RUNID", "DATE", "NAME", "MOLIS", "SEQ"])
-	cfg.var = Table("VARIANTS", ["HGVS", "FAS_ID"])
-	cfg.var.df = cfg.var.df.astype({"FAS_ID": int})
-
-	cfg.phe = Table("PHENOS", ["NAME", "MOLIS"])
-	cfg.sir = Table("SUSCEPTIBILITIES", ["DATE", "DRUG",  "CONTROL", "EC50", "HSVTYPE", "SIR", "VALID", "PHE_ID"])
-	cfg.sir.df = cfg.sir.df.astype({"PHE_ID": int})
-
-	# Static tables - these contain fixed reference information
-	#	hsv		Maps older MOLIS IDs to HSV type, based upon an MMD download
-	#	thr		Configures the Susceptible/Intermediate/Resistant PRA cut-offs
-	#	lit		Table of reported variants and their impact upon drug
-	#			susceptibilities
-	#	ref		Table of the references used in <lit>
-	#	tgt		Table of drugs and the domains targeted (for mutation queries)
-
-	cfg.hsv, cfg.thr, cfg.lit, cfg.ref = map(
-		Table, ("HSVTYPES", "THRESHOLDS", "LITERATURE", "REFERENCES")
-	)
-
-	cfg.targets = yaml.safe_load(open(f"{data_dir}/external/targets.yaml"))
-
 
 "TABLE QUERY FUNCTIONS"
 
@@ -274,3 +161,126 @@ def hgvs2sir(hgvs):
 	phe_df = molis2phe(molis)
 	sir_df = pheids2sir(phe_df.index)
 	return Table(pd.merge(sir_df, phe_df, left_on="PHE_ID", right_index=True))
+
+################################################################################
+"CLASSES"
+
+class Table(object):
+
+	def __init__(self, src, location, cols=[]):
+
+		self.location = location
+		self.cols = cols
+		if (src_type := type(src)) == str: self.df = self.read(src)
+		elif src_type == type(pd.DataFrame()): self.df = src
+		else: raise
+
+	def __repr__(self):
+		return self.df.to_string()
+
+	def read(self, name):
+		self.fname = f"{data_dir}/{self.location}/{name}.tsv"
+		df = read_tsv(self.fname, cols=self.cols, comment="\"").fillna("").astype(str)
+		self.cols = df.columns
+		if "DATE" in df.columns:
+			df.DATE = pd.to_datetime(df.DATE, format="%Y-%m-%d")
+		return df
+
+	def append(self, df, *,
+			   fill="", dup_cols=[], sort_cols=[], reset=False, write=True):
+		"""
+		Appends <df> data to a Table.df by simple pd.concat. The following
+		actions are performed in order (i.e. reset will follow a sort).
+		- index		Adds max(Table.df.index) + 1 to the <df> index
+		- fill		The fill value for NA cells
+		- dup_cols	Removes duplicates of <dup_cols> columns (keeps first)
+		- sort		Sorts the Table.df by the columns in <sort>
+		- reset		Resets the index after concatenation
+		- write		Finally, the table is saved to file by default
+		"""
+
+		self.df = pd.concat((self.df, df)).fillna(fill)
+		if dup_cols:
+			self.df = self.df.drop_duplicates(dup_cols)
+		if sort_cols:
+			self.df = self.df.sort_values(sort_cols)
+		if reset:
+			self.df = self.df.reset_index(drop=True)
+		if write:
+			self.write()
+
+	def filter(self, filters, inverse=False, index=False, copy=False, setop=set.intersection):
+		"""
+		Returns the sub_df where all <filters> are satisfied. <filters> is a
+		list of (col, values) pairs (<col> can be "index"), returning indices
+		where col == values. The <inverse> argument defaults to all False, but
+		can be a tuple of the same length as <filters>, specifying whether a
+		filter returns the inverse or not.
+		(The intersection of all indices...)
+		"""
+		def subdf(cv, i):
+			c, v = cv
+			v = gU.parse_input_data(v)
+			if c == "index": boolean = self.df.index.isin(v)
+			else: boolean = self.df[c].isin(v)
+			if i: boolean = ~boolean
+			return set(self.df[boolean].index)
+
+		if type(filters[0]) != tuple: filters = (filters, )
+		if type(inverse) == bool: inverse = it.repeat(inverse, len(filters))
+
+		indices = sorted(
+			setop(*it.starmap(subdf, zip(filters, inverse)))
+		)
+		if index: return indices
+		df = self.df.loc[indices]
+		if copy: return Table(df.copy())
+		return df
+
+	def delete(self, indexes):
+		self.df = self.df[~self.df.index.isin(indexes)]
+
+	def write(self):
+		gU.write_tsv(self.df, self.fname, index=True)
+
+"SET UP TABLES FROM DATA TSVs"
+
+# Variable tables - these get updated with new data
+#	fas		FASTA sequences, with source RUN ID, date of run etc.
+#	var		Variants detected in FASTAs, with an ID link to <fas>
+#	phe		PRA files
+#	sir		Susceptibilities from PRAs, with an ID link to <phe>
+
+fas = Table(
+	"FASTAS", location="dynamic",
+	cols=["RUNID", "DATE", "FILENAME", "LOCATION", "NAME", "MOLIS", "SEQ"]
+)
+var = Table(
+	"VARIANTS", location="dynamic",
+	cols=["HGVS", "FAS_ID"]
+)
+var.df = var.df.astype({"FAS_ID": int})
+
+phe = Table(
+	"PHENOS", location="dynamic",
+	cols=["NAME", "MOLIS"]
+)
+sir = Table(
+	"SUSCEPTIBILITIES", location="dynamic",
+	cols=["DATE", "DRUG",  "CONTROL", "EC50", "HSVTYPE", "SIR", "VALID", "PHE_ID"]
+)
+sir.df = sir.df.astype({"PHE_ID": int})
+
+# Static tables - these contain fixed reference information
+#	hsv		Maps older MOLIS IDs to HSV type, based upon an MMD download
+#	thr		Configures the Susceptible/Intermediate/Resistant PRA cut-offs
+#	lit		Table of reported variants and their impact upon drug
+#			susceptibilities
+#	ref		Table of the references used in <lit>
+
+hsv, thr, lit, ref = map(
+	partial(Table, location="static"),
+	("HSVTYPES", "THRESHOLDS", "LITERATURE", "REFERENCES")
+)
+
+targets = yaml.safe_load(open(f"{data_dir}/static/targets.yaml"))
