@@ -14,6 +14,7 @@ import sys
 import subprocess as sp
 
 from collections import defaultdict
+from glob import glob
 
 from utils import gU
 
@@ -21,6 +22,7 @@ from utils import gU
 code_dict = defaultdict(
 	lambda: "Unspecified error",
 	{
+		 2: "Invalid arguments",
 		65: "Invalid arguments",
 		66: "Tool name not valid",
 		67: "No FASTAs to process",
@@ -32,13 +34,25 @@ def parse_arguments():
 	Parses the first argument only. Returns the rest as <others>.
 	"""
 
-	ap = argparse.ArgumentParser()
-	ap.add_argument("tool")
+	ap = argparse.ArgumentParser(add_help=False)
+	ap.add_argument(
+		"tool", nargs="?", default="",
+		help="Choose from 'sequences', 'phenos', 'mutation', 'molis', 'modify' "
+		     "and 'suppress'"
+	)
+	ap.add_argument(
+		"-h", "--help", action="store_true",
+		help="show this help message and exit"
+	)
 
 	args, others = ap.parse_known_args()
-	tool = args.tool.upper()
 
-	return tool, others
+	if (tool := args.tool.upper()): return tool, others
+
+	ap.print_help()
+	if not args.help: error_report(65)
+
+	sys.exit()
 
 ################################################################################
 def error_report(code):
@@ -56,13 +70,13 @@ def HSVgeno2pheno(tool, others):
 	with the remaining arguments (<others>).
 	"""
 
-	if not gU.exists(module := f"{os.path.dirname(__file__)}/{tool}.py"):
-		print("Tool must be one of SEQUENCES, PHENOS, MOLIS, MUTATIONS, "
-			 f"SUPPRESS, or MODIFY ({tool} entered)")
-		return 66
-
-	cp = sp.run([module, *others])
-	return cp.returncode
+	module = f"{os.path.dirname(__file__)}/{tool.upper()}.py"
+	try:
+		print(f"Running {gU.filestem(module)}")
+		returncode = sp.run([module, *others]).returncode
+	except FileNotFoundError:
+		returncode = 66
+	return returncode
 
 ################################################################################
 if __name__ == "__main__":

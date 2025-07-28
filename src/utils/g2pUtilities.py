@@ -199,6 +199,8 @@ class Table(object):
 		- write		Finally, the table is saved to file by default
 		"""
 
+		max_index = 0 if self.df.empty else max(self.df.index) + 1
+		df.index += max_index
 		self.df = pd.concat((self.df, df)).fillna(fill)
 		if dup_cols:
 			self.df = self.df.drop_duplicates(dup_cols)
@@ -226,6 +228,8 @@ class Table(object):
 			if i: boolean = ~boolean
 			return set(self.df[boolean].index)
 
+		if self.df.empty: return self.df
+
 		if type(filters[0]) != tuple: filters = (filters, )
 		if type(inverse) == bool: inverse = it.repeat(inverse, len(filters))
 
@@ -234,7 +238,7 @@ class Table(object):
 		)
 		if index: return indices
 		df = self.df.loc[indices]
-		if copy: return Table(df.copy())
+		# if copy: return self.df.copy()
 		return df
 
 	def delete(self, indexes):

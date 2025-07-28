@@ -30,23 +30,25 @@ def parse_arguments():
 	Parse command-line arguments.
 	"""
 
-	ap = argparse.ArgumentParser()
+	ap = argparse.ArgumentParser(prog="HSVgeno2pheno.py sequences")
 
 	ap.add_argument(
 		"-i", "--import_data", action="store_true",
 		help="Import sequences to FASTAS table and copy file to ./data/archive"
 	)
 	ap.add_argument(
-		"-r", "--report_data",
-		help="Control reporting of interpretation (see docs)"
+		"-r", "--report_data", nargs="?", const=1,
+		help="Control reporting of interpretation (see docs for format codes) [1]"
 	)
+
 	ap.add_argument(
-		"-f", dest="fasta", help="path/to/fasta/file. OVERRIDES -d"
+		"-f", dest="fasta", help="path/to/fasta/file. *OVERRIDES -d*"
 	)
 	ap.add_argument(
 		"-d", dest="directory", default=os.getcwd(),
 		help="path/to/dir/containing/fasta/file(s) [.]"
 	)
+
 	ap.add_argument(
 		"--runid", help="Run ID (overrides automatic parsing)"
 	)
@@ -58,7 +60,14 @@ def parse_arguments():
 		help="Force overwrite of existing records with identical data"
 	)
 
-	return ap.parse_args()
+	args = ap.parse_args()
+
+	if not (args.import_data or args.report_data):
+		ap.print_help()
+		print("At least one of -i or -r must be passed")
+		return 65
+
+	return args
 
 ################################################################################
 def get_fastas():
@@ -67,11 +76,12 @@ def get_fastas():
 	FASTA file(s).
 	"""
 
-	if args.fasta is not None: return [os.path.abspath(args.fasta)]
+	map_func = lambda f: re.search(r"^[\w\.]+\.fas?(?:ta)?$", os.path.basename(f))
 
-	map_func = lambda f: re.search(r"^\w+\.fas?(?:ta)?$", os.path.basename(f))
-
-	return [*filter(map_func, glob(f"{os.path.abspath(args.directory)}/*"))]
+	if args.fasta is not None:
+		return [os.path.abspath(args.fasta)]
+	else:
+		return [*filter(map_func, glob(f"{os.path.abspath(args.directory)}/*"))]
 
 ################################################################################
 def get_df(fas):
@@ -85,27 +95,29 @@ def get_df(fas):
 	print(f"Processing {filename} in {location}")
 
 	df =  gU.fas2df(fas)
+	df.index += 1
 
 	df["SEQ"] = df.SEQ.str.replace("-", "")
 	df["MOLIS"] = df.NAME.apply(g2pU.MOLIS_name)
+	df["FAS_ID"] = int(0)
 
-	if date_str := re.match(r"^\d{6}", filename):
+	date = pd.NaT
+	if date_str := re.match(r"^\d{6}", runid := gU.filestem(location)):
 		date = pd.to_datetime(date_str.group(0), format="%y%m%d")
-		runid = get_runid(gU.filestem(basename).split("_" , 1)[1])
-	else:
-		date = pd.NaT
-		runid = gU.filestem(location)
+		runid = runid.split("_" , 1)[1]
 
+	# Passed rundate and runid values override derived values
 	date = args.rundate if args.rundate else date
 	runid = args.runid if args.runid else runid
 
+	# Associate all metadata with each sample
 	metadata = (filename, date, runid, location)
 	df[id_cols] = metadata
 
 	return df
 
 ################################################################################
-def import_sequences(df):
+def import_sequences(df, fas):
 	"""
 	If --force, any existing rows in the "FASTAS" table are deleted, and the
 	corresponding entries in the "VARIANTS" table are removed
@@ -115,19 +127,54 @@ def import_sequences(df):
 	not --force, it will be deduplicated immediately after being appended,
 	leaving the table unchanged.)
 	"""
-	#
+
 	if args.force:
+		print("Forcing overwrite")
+
 		indexes = get_indexes(df[id_cols[:-1]].iloc[0].values)
-		g2pU.fas.df = g2pU.fas.filter(
-			filters=("index", indexes), inverse=True, copy=True
-		)
-		g2pU.fas.df = g2pU.fas.filter(
-			filters=("FAS_ID", indexes), inverse=True, copy=True
+		print("Previous indexes of input FASTA file sequences:",
+			  ", ".join(map(str, indexes))
 		)
 
-	gU.shell("cp", fas, f"{g2pU.data_dir}/archive")
-	g2pU.fas.append(df=df, dup_cols=["NAME"] + id_cols[:-1])
+		print("Deleting from FASTAS table")
+		g2pU.fas.df = g2pU.fas.filter(
+			filters=("index", indexes), inverse=True
+		)
 
+		print("Deleting associated variants from VARIANTS table")
+		g2pU.var.df = g2pU.fas.filter(
+			filters=("FAS_ID", indexes), inverse=True
+		)
+
+	print("Appending new data to FASTAS table, and deleting if duplicated.")
+	g2pU.fas.append(df=df.drop("FAS_ID", axis=1), dup_cols=["NAME"] + id_cols[:-1])
+
+	indexes = get_indexes(df[id_cols[:-1]].iloc[0].values)
+	df.loc[:, "FAS_ID"] = indexes
+
+	archive = f"{g2pU.data_dir}/archive/{indexes[0]}_{os.path.basename(fas)}"
+	print(f"Copying FASTA files to {archive}")
+	gU.shell("cp", fas, archive)
+
+	return df
+
+################################################################################
+def process_variants(df):
+
+	print("Processing variants in FASTA(s)")
+
+	tested = df.FAS_ID.isin(g2pU.var.df.FAS_ID)
+	var_df = pd.concat((
+		pV.get_vars(pV.map_seqs(df[~tested])),
+		g2pU.var.filter(filters=("FAS_ID", df.FAS_ID.values))
+	))
+
+	if args.import_data:
+		g2pU.var.append(df=var_df, dup_cols=["HGVS", "FAS_ID"])
+
+	print(df)
+	print(var_df)
+	
 ################################################################################
 def report_sequences(df):
 	pass
@@ -137,15 +184,12 @@ def report_sequences(df):
 def main(args):
 
 	# Test args
-	if not (args.import_data or args.report_data):
-		print("Either -i must be set and/or -r must have an argument")
-		return 65
-
 	if (fastas := get_fastas()) == []: return 67 	# No FASTAs to process
 
 	for fas in fastas:
 		df = get_df(fas)
-		if args.import_data: import_sequences(df)
+		if args.import_data: df = import_sequences(df, fas)
+		var_df = process_variants(df)
 		if args.report_data: report_sequences(df)
 
 ################################################################################
@@ -159,4 +203,5 @@ def get_indexes(values):
 if __name__ == "__main__":
 
 	args = parse_arguments()
-	sys.exit(main(args))
+	returncode = args if type(args) is int else main(args)
+	sys.exit(returncode)
