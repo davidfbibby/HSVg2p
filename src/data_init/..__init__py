@@ -1,0 +1,6 @@
+from utils import generalUtilities as gU
+from utils import g2pUtilities as g2pU
+
+print("DATA_INIT. About to import from g2pTables")
+#from . import g2pTables as g2pT
+

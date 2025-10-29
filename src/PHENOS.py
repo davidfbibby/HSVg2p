@@ -2,14 +2,14 @@
 
 import argparse
 import os
-import re
 import sys
 
-from utils import g2pU, gU
+import pandas as pd
+
+from utils import g2pU, gU, pU
+from data_init.g2pTables import *
 
 ################################################################################
-"Parse command-line arguments"
-
 def parse_arguments():
 
 	ap = argparse.ArgumentParser()
@@ -19,14 +19,16 @@ def parse_arguments():
 		help="Report all phenotypic data from the same sample(s)"
 	)
 	ap.add_argument(
-		"-f", dest="pheno", help="path/to/pheno/file. OVERRIDES -d"
+		"-s", "--statistics", action="store_true",
+		help="Give description of databases (overrides other options)"
+	)
+
+	ap.add_argument(
+		"-f", dest="single_file", help="path/to/pheno/file. OVERRIDES -d"
 	)
 	ap.add_argument(
 		"-d", dest="directory", default=os.getcwd(),
 		help="path/to/dir/containing/pheno/file(s) [.]"
-	)
-	ap.add_argument(
-		"--runid", help="Run ID (overrides automatic parsing)"
 	)
 	ap.add_argument(
 		"--rundate", help="Run date (YYMMDD, overrides automatic parsing)"
@@ -35,21 +37,68 @@ def parse_arguments():
 		"--force", action="store_true",
 		help="Force overwrite of existing records with identical data"
 	)
+	ap.add_argument(
+		"--recursive", action="store_true",
+		help="Set to look in all subdirectories of <directory>"
+	)
 
-	return ap.parse_args()
+	args = ap.parse_args()
+
+	return args
 
 ################################################################################
+def find_PRA_files():
 
+	log.info("*-- Getting PRA file(s) --*")
+
+	PRAs = g2pU.find_input_files(args, r"^[\w\.-]+\.xlsx?$")
+
+	df = pd.DataFrame(map(parse_input_file, PRAs), columns=phe.cols)
+	df = phe.append(df)[1]
+	phe.write()
+
+	return df
+
+#-------------------------------------------------------------------------------
+def parse_input_file(PRA):
+	path, fname = os.path.split(PRA)
+	return [path, fname, gU.MOLIS_name(fname, spaces=True)]
+
+################################################################################
+def data_import(df, table):
+	"""
+	If <args.force>, deletes entries matching <df> from <table> and iteratively
+		removes corresponding entries from child tables.
+	"""
+
+	if table is g2pU.phe and args.force:
+		print("Forcibly overwriting PHENOS. Removing PRA files and their "
+			  "SIR data from the PHENOs and SIRs tables.")
+
+		indexes = table.delete(df)
+		print("Removing old PRA(s) from archives")
+		gU.remove([*map(archive, table.df.iloc[indexes].itertuples())])
+
+	print(f"Importing any new data into {gU.filestem(table.fname)}")
+	return table.append(df, write=False)
 
 ################################################################################
 def main(args):
 
-	# Establish PHENO file "list"
-	regex = re.compile(r"^\w+\.xlsx?$")
-	if args.pheno is not None: args.pheno=[args.pheno]
-	else: args.pheno = [*filter(regex.search, os.listdir(args.directory))]
+	global log
+
+	log = g2pU.getLog("phenos")
+	g2pU.log = gU.log = log
+
+	if args.statistics: return pU.statistics()
+
+	df = find_PRA_files()
+	g2pU.analyse_data(df, ec50, pU.parse_PRA, "PRA")
 
 ################################################################################
 if __name__ == "__main__":
 
-	sys.exit(main(parse_arguments()))
+	args = parse_arguments()
+	sys.exit(main(args))
+
+################################################################################

@@ -12,7 +12,7 @@ def map_seqs(df):
 
 	if df.empty: return pd.DataFrame()
 
-	print("\tMapping with BWA")
+	print("Mapping input sequences with BWA")
 
 	fas = gU.df2fas(df.reset_index(), "tmp.fas", cols=["index", "SEQ"])
 
@@ -22,14 +22,13 @@ def map_seqs(df):
 
 	df = pd.DataFrame(map(gU.get_sam_line, pc.strip().split("\n")))
 
-	print(df)
-
 	func = lambda x: str(x.RNAME).split("-")[1].split("_")
 	df[["HSVTYPE", "DOMAIN"]] = df.apply(func, axis=1, result_type="expand")
+	df = df.drop(["FLAG", "MAPQ", "RNEXT", "PNEXT", "TLEN", "QUAL"], axis=1)
+	df = df.set_index("QNAME")
+	print(df)
 
-	print("\tMapping complete")
-
-	return df.set_index("QNAME")
+	return df
 
 ################################################################################
 
@@ -78,7 +77,7 @@ def parse_fas(index, line):
 
 	df = pd.DataFrame(data=variants, columns=["HGVS"])
 	df["HGVS"] = f"{line.HSVTYPE}.{line.DOMAIN}." + df.HGVS
-	df["FAS_ID"] = index
+	df["PARENT_ID"] = index
 
 	return df
 

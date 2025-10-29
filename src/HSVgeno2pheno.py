@@ -16,7 +16,7 @@ import subprocess as sp
 from collections import defaultdict
 from glob import glob
 
-from utils import gU
+from utils import gU, g2pU
 
 ################################################################################
 code_dict = defaultdict(
@@ -26,6 +26,8 @@ code_dict = defaultdict(
 		65: "Invalid arguments",
 		66: "Tool name not valid",
 		67: "No FASTAs to process",
+		68: "Mutation not in valid HGVS format",
+		69: "Incorrect reference amino acid"
 })
 
 ################################################################################
@@ -60,7 +62,7 @@ def error_report(code):
 	Prints relevant error messages based upon <code>.
 	"""
 
-	print(f"Failed with exit code {code}: {code_dict[code]}")
+	log.error(f"Failed with exit code {code}: {code_dict[code]}")
 	sys.exit(code)
 
 ################################################################################
@@ -70,9 +72,13 @@ def HSVgeno2pheno(tool, others):
 	with the remaining arguments (<others>).
 	"""
 
+	global log
+
+	log = g2pU.getLog("HSVgeno2pheno")
+
 	module = f"{os.path.dirname(__file__)}/{tool.upper()}.py"
 	try:
-		print(f"Running {gU.filestem(module)}")
+		log.info(f"Running {gU.filestem(module)}")
 		returncode = sp.run([module, *others]).returncode
 	except FileNotFoundError:
 		returncode = 66

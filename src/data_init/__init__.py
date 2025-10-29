@@ -1,0 +1,1 @@
+from . import g2pConstants as g2pC
